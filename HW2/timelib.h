@@ -13,6 +13,9 @@
 * Creation Date:
 *     September 10, 2023
 *
+* Last Changes:
+*     September 16, 2024
+*
 * Notes:
 *     Ensure to link against the necessary dependencies when compiling and
 *     using this library. Modifications or improvements are welcome. Please
@@ -31,12 +34,8 @@
 #define NANO_IN_SEC (1000*1000*1000)
 
 /* Macro wrapper for RDTSC instruction */
-#define get_clocks(clocks)\
-	do{                                               \
-		uint32_t __clocks_hi, __clocks_lo;              \
-		__asm__ __volatile__("rdtsc":"=a"(__clocks_lo),"=d"(__clocks_hi)); \
-		clocks = (((uint64_t)__clocks_hi)<<32)|((uint64_t)__clocks_lo);\
-	}while(0)
+#define get_clocks(clocks)						\
+    /* IMPLEMENT ME! See lecture slides for inspiration. */
 
 /* Return the number of clock cycles elapsed when waiting for
  * wait_time seconds using sleeping functions */

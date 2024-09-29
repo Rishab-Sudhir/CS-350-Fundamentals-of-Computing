@@ -21,8 +21,8 @@
 * Creation Date:
 *     September 10, 2023
 *
-* Last Update:
-*     September 9, 2024
+* Last Changes:
+*     September 16, 2024
 *
 * Notes:
 *     Ensure to have proper permissions and available port before running the
@@ -32,90 +32,120 @@
 *
 *******************************************************************************/
 
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <inttypes.h>      // For format specifiers like PRIu64 used in printf()
+#include <sched.h>
+#include <signal.h>
+
+/* Needed for wait(...) */
+#include <sys/types.h>
+#include <sys/wait.h>
 
 /* Include struct definitions and other libraries that need to be
  * included by both client and server */
 #include "common.h"
 
+// to allow multithreading
+#include <pthread.h>
+
+
 #define BACKLOG_COUNT 100
-#define USAGE_STRING				    \
+#define USAGE_STRING				\
 	"Missing parameter. Exiting.\n"		\
 	"Usage: %s <port_number>\n"
+
+/* 4KB of stack for the worker thread */
+#define STACK_SIZE (4096)
+
+/* Main logic of the worker thread */
+/* IMPLEMENT HERE THE MAIN FUNCTION OF THE WORKER */
+void *worker_main(void *arg) {
+	struct timespec current_time;
+
+	// Print initial message
+	clock_gettime(CLOCK_MONOTONIC, &current_time);
+	printf("[#WORKER#] %lf Worker Thread Alive!\n", TSPEC_TO_DOUBLE(current_time));
+
+	while (1) {
+
+		// busy wait for 1 second
+		struct timespec wait_time = {1, 0}; 
+		busywait_timespec(wait_time);
+
+		// print secondary message
+		clock_gettime(CLOCK_MONOTONIC, &current_time);
+		printf("[#WORKER#] %lf Still Alive!\n", TSPEC_TO_DOUBLE(current_time));
+
+		// sleep again for 1 second
+		sleep(1);
+	}
+	
+	return NULL; // We'll never reach here due to the infinite loop
+}
 
 /* Main function to handle connection with the client. This function
  * takes in input conn_socket and returns only when the connection
  * with the client is interrupted. */
-static void handle_connection(int conn_socket)
+void handle_connection(int conn_socket)
 {
-	ssize_t bytes_received, bytes_sent;
-	struct request req;
-	struct response res;
-	struct timespec receipt_timestamp, completion_timestamp;
-	char sent_timestamp_str[32];
-	char request_length_str[32];
-	char receipt_timestamp_str[32];
-	char completion_timestamp_str[32];
-
-	while(1){
-		// Receive the request from the client
-		bytes_received = recv(conn_socket, &req, sizeof(req), 0);
-
-		if (bytes_received == 0) {
-			// Connection closed by client
-			printf("INFO: Client disconnected.\n");
-			break;
-		} else if (bytes_received < 0) {
-			perror("recv failed");
-			break;
-		} else if (bytes_received != sizeof(req)) {
-			fprintf(stderr, "ERROR: Incomplete request received.\n");
-			break;
-		}
-
-		// Record the receipt timestamp
-		clock_gettime(CLOCK_MONOTONIC, &receipt_timestamp);
-
-		// Perform busy-wait for the specified request length
-		get_elapsed_busywait(req.request_length.tv_sec, req.request_length.tv_nsec);
-
-		// Record the completion timestamp
-		clock_gettime(CLOCK_MONOTONIC, &completion_timestamp);
-
-		// Prepare the response
-		res.request_id = req.request_id;
-		res.reserved = 0;
-		res.ack = 0; // Indicate success
-
-		// Send the response back to the client
-		bytes_sent = send(conn_socket, &res, sizeof(res), 0);
-		if (bytes_sent < 0) {
-			perror("send failed");
-			break;
-		}
-
-		// Format timestamps for output
-		snprintf(sent_timestamp_str, sizeof(sent_timestamp_str), "%.6f", TSPEC_TO_DOUBLE(req.sent_timestamp));
-		snprintf(request_length_str, sizeof(request_length_str), "%.6f", TSPEC_TO_DOUBLE(req.request_length));
-		snprintf(receipt_timestamp_str, sizeof(receipt_timestamp_str), "%.6f", TSPEC_TO_DOUBLE(receipt_timestamp));
-		snprintf(completion_timestamp_str, sizeof(completion_timestamp_str), "%.6f", TSPEC_TO_DOUBLE(completion_timestamp));
-
-		// Output the required information
-		printf("R%" PRIu64 ":%s,%s,%s,%s\n",
-			req.request_id,
-			sent_timestamp_str,
-			request_length_str,
-			receipt_timestamp_str,
-			completion_timestamp_str);
-	}
 	
-	// Close the connection socket
+	/* IMPLEMENT HERE THE LOGIC TO START THE WORKER THREAD. */
+	/* The connection with the client is alive here. Let's start
+	 * the worker thread. */
+
+	pthread_t worker_thread;
+
+	// Start the worker thread
+	if (pthread_create(&worker_thread, NULL, worker_main, NULL) != 0){
+		perror("Failed to create worker thread");
+		close(conn_socket);
+		return;
+	}
+
+	// Detach the worker thread
+	pthread_detach(worker_thread);
+	
+	/* We are ready to proceed with the rest of the request
+	 * handling logic. */
+	/* REUSE LOGIC FROM HW1 TO HANDLE THE PACKETS */
+
+	struct request * req = (struct request *)malloc(sizeof(struct request));
+	struct response * resp = (struct response *)malloc(sizeof(struct response));
+	struct timespec receipt, completion;
+	size_t in_bytes;
+
+	do {
+		in_bytes = recv(conn_socket, req, sizeof(struct request), 0);
+		clock_gettime(CLOCK_MONOTONIC, &receipt);
+
+		if (in_bytes) {
+			busywait_timespec(req->req_length);
+			clock_gettime(CLOCK_MONOTONIC, &completion);
+
+			/* Now provide a response! */
+			resp->req_id = req->req_id;
+			resp->ack = 0;
+			send(conn_socket, resp, sizeof(struct response), 0);
+
+			printf("R%ld:%lf,%lf,%lf,%lf\n", req->req_id,
+			       TSPEC_TO_DOUBLE(req->req_timestamp),
+			       TSPEC_TO_DOUBLE(req->req_length),
+			       TSPEC_TO_DOUBLE(receipt),
+			       TSPEC_TO_DOUBLE(completion)
+			    );
+		}
+	} while (in_bytes);
+
+	free(req);
+	free(resp);
+	shutdown(conn_socket, SHUT_RDWR);
 	close(conn_socket);
+	printf("INFO: Client disconnected.\n");
 
 }
+
 
 /* Template implementation of the main function for the FIFO
  * server. The server must accept in input a command line parameter

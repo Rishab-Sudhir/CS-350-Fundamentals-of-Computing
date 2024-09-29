@@ -12,6 +12,7 @@
 #     - all: Compiles all modules
 #     - clock: Compiles the CPU clock measurement functions
 #     - server: Compiles the server executable
+#     - client: Compiles the client executable
 #     - clean: Removes compiled binaries and intermediate files
 #
 # Usage:
@@ -59,35 +60,3 @@ $(BUILDDIR)/%.o: %.c
 
 clean:
 	rm *~ -rf $(BUILDDIR)
-
-
-# For testing clock alone
-
-# TARGETS = clock
-# LIBS = timelib
-# LDFLAGS = -lm
-# BUILDDIR = build
-# BUILD_TARGETS = $(addprefix $(BUILDDIR)/,$(TARGETS))
-# OBJS = $(addprefix $(BUILDDIR)/,$(addsuffix .o,$(TARGETS) $(LIBS)))
-# LIBOBJS = $(addprefix $(BUILDDIR)/,$(addsuffix .o,$(LIBS)))
-# CFLAGS = -W -Wall -g
-
-# .PHONY: all clean clock
-
-# all: $(BUILD_TARGETS)
-
-# clock: $(BUILDDIR)/clock
-
-# $(BUILDDIR)/clock: $(BUILDDIR) $(OBJS)
-# 	gcc $(CFLAGS) -o $@ $(BUILDDIR)/clock.o $(LIBOBJS) $(LDFLAGS)
-
-# $(BUILDDIR):
-# 	mkdir -p $(BUILDDIR)
-
-# $(BUILDDIR)/%.o: %.c
-# 	gcc $(CFLAGS) -o $@ -c $<
-
-# clean:
-# 	rm -f *~ $(BUILDDIR)/*
-
-

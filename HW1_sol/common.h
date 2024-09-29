@@ -1,15 +1,11 @@
-/* common.h */
+/*
 
-#ifndef COMMON_H
-#define COMMON_H
+*/
 
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <math.h>
-#include <stdint.h>     // For uint64_t, uint8_t
-#include <time.h>       // For struct timespec
-
 
 /* Includes that are specific for TCP/IP */
 #include <netinet/in.h>
@@ -32,22 +28,18 @@
 #define TSPEC_TO_DOUBLE(spec)				\
     ((double)(spec.tv_sec) + (double)(spec.tv_nsec)/NANO_IN_SEC)
 
-/* Request payload as sent by the client and received by the server. */
-#pragma pack(push, 1)  // Disable padding
+/* Request payload as sent by the client and received by the
+ * server. */
 struct request {
-    uint64_t request_id;
-    struct timespec sent_timestamp;
-    struct timespec request_length;
+	uint64_t req_id;
+	struct timespec req_timestamp;
+	struct timespec req_length;
 };
-#pragma pack(pop)
 
-/* Response payload as sent by the server and received by the client. */
-#pragma pack(push, 1)  // Disable padding
+/* Response payload as sent by the server and received by the
+ * client. */
 struct response {
-    uint64_t request_id;
-    uint64_t reserved;
-    uint8_t ack;
+	uint64_t req_id;
+	uint64_t reserved;
+	uint8_t  ack;
 };
-#pragma pack(pop)
-
-#endif /* COMMON_H */ // to prevent multiple redefinitions
