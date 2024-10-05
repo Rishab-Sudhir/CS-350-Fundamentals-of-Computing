@@ -177,8 +177,8 @@ def main():
     })
 
     # Save results to a CSV file for later analysis
-    results_df.to_csv('./results/experiment_results.csv', index=False)
-    print("Experiment results saved to './results/experiment_results.csv'.")
+    results_df.to_csv('./results/1a_experiment_results.csv', index=False)
+    print("Experiment results saved to './results/1a_experiment_results.csv'.")
 
     fig, ax1 = plt.subplots(figsize=(12, 8))
 
