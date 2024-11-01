@@ -50,9 +50,13 @@
 /* Needed for semaphores */
 #include <semaphore.h>
 
+#include <inttypes.h> // For PRIu64 format 
+
 /* Include struct definitions and other libraries that need to be
  * included by both client and server */
 #include "common.h"
+
+struct image * image_array[1024]; // stores pointers to images indexed by img_id
 
 #define BACKLOG_COUNT 100
 #define USAGE_STRING				\
@@ -98,6 +102,7 @@ struct queue {
 	size_t rd_pos;
 	size_t max_size;
 	size_t available;
+	int number_of_items; // new field to track items (tracks size of queue)
 	enum queue_policy policy;
 	struct request_meta * requests;
 };
@@ -130,6 +135,7 @@ void queue_init(struct queue * the_queue, size_t queue_size, enum queue_policy p
 						     * the_queue->max_size);
 	the_queue->available = queue_size;
 	the_queue->policy = policy;
+	the_queue->number_of_items = 0; // initialize the number of items
 }
 
 /* Add a new request <request> to the shared queue <the_queue> */
@@ -151,6 +157,7 @@ int add_to_queue(struct request_meta to_add, struct queue * the_queue)
 		the_queue->requests[the_queue->wr_pos] = to_add;
 		the_queue->wr_pos = (the_queue->wr_pos + 1) % the_queue->max_size;
 		the_queue->available--;
+		the_queue->number_of_items++; // increment the number of items
 		/* QUEUE SIGNALING FOR CONSUMER --- DO NOT TOUCH */
 		sem_post(queue_notify);
 	}
@@ -175,6 +182,7 @@ struct request_meta get_from_queue(struct queue * the_queue)
 	retval = the_queue->requests[the_queue->rd_pos];
 	the_queue->rd_pos = (the_queue->rd_pos + 1) % the_queue->max_size;
 	the_queue->available++;
+	the_queue->number_of_items--; //decrement the number of items
 
 	/* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
 	sem_post(queue_mutex);
@@ -207,6 +215,12 @@ void dump_queue_status(struct queue * the_queue)
 	/* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
 }
 
+// function to get an image_id
+uint64_t get_new_image_id() {
+    static uint64_t img_id_counter = 1024;  // Start from 1024
+    return img_id_counter++;
+}
+
 /* Main logic of the worker thread */
 void * worker_main (void * arg)
 {
@@ -225,7 +239,7 @@ void * worker_main (void * arg)
 		req = get_from_queue(params->the_queue);
 
 		/* Detect wakeup after termination asserted */
-		if (params->worker_done)
+		if (params->worker_done) 
 			break;
 
 		clock_gettime(CLOCK_MONOTONIC, &req.start_timestamp);
@@ -233,23 +247,143 @@ void * worker_main (void * arg)
 		/* IMPLEMENT ME! Take the necessary steps to process
 		 * the client's request for image processing. */
 
-		clock_gettime(CLOCK_MONOTONIC, &req.completion_timestamp);
+		// Processing the Request
+		uint8_t err = 0;
+		struct image * newImage = NULL;
+		uint64_t new_img_id = req.request.img_id; // Default to the original image id
 
-		/* Now provide a response! */
-		resp.req_id = req.request.req_id;
-		resp.ack = RESP_COMPLETED;
+        /* Check if the image exists */
+        if (req.request.img_op != IMG_RETRIEVE) {
+            if (image_array[req.request.img_id] == NULL) {
+                err = 1; // Image not found
+            }
+        }
 
-		/* IMPLEMENT ME! Set the img_id field for the response
-		 * here, if necessary. */
+		if (err == 0) {
+			// Perform operation based on img_op
+			switch(req.request.img_op) {
+				case IMG_ROT90CLKW:
+					// Handling Rotation
+					newImage = rotate90Clockwise(image_array[req.request.img_id], &err);
+					break;
+				case IMG_BLUR:
+					// Handling Image Blue
+					newImage = blurImage(image_array[req.request.img_id], &err);
+					break;
+				case IMG_SHARPEN:
+					// Handling Image Sharpen
+					newImage = sharpenImage(image_array[req.request.img_id], &err);
+					break;
+				case IMG_VERTEDGES:
+					// Detecting Verticle Edges
+					newImage = detectVerticalEdges(image_array[req.request.img_id], &err);
+					break;
+				case IMG_HORIZEDGES:
+					// Detecting Horizontal Edges
+					newImage = detectHorizontalEdges(image_array[req.request.img_id], &err);
+					break;
+				case IMG_RETRIEVE:
+					/* Handle image retrieval separately */
+					if (image_array[req.request.img_id]) {
+						/* Send response */
+						
+						// // Save the manipulated image
+						// char filename[256];
+						// snprintf(filename, sizeof(filename), "retrieved_image_%lu.bmp", req.request.img_id);
+						// uint8_t save_result = saveBMP(filename, image_array[req.request.img_id]);
 
-		send(params->conn_socket, &resp, sizeof(struct response), 0);
+						// if (save_result != 0) {
+						// 	// Handle error in saving the image
+						// 	fprintf(stderr, "Error saving image to %s\n", filename);
+						// }
 
-		/* IMPLEMENT ME! Print out the post-processing status
-		 * report. */
+						resp.req_id = req.request.req_id;
+						resp.img_id = req.request.img_id;
+						resp.ack = RESP_COMPLETED;
+						send(params->conn_socket, &resp, sizeof(struct response), 0);
 
-		dump_queue_status(params->the_queue);
+						/* Send the image */
+						sendImage(image_array[req.request.img_id], params->conn_socket);
+
+						/* Record completion timestamp */
+						clock_gettime(CLOCK_MONOTONIC, &req.completion_timestamp);
+
+						/* Print status report */
+						sync_printf("T%d R%" PRIu64 ":%lf,%s,%d,%" PRIu64 ",%" PRIu64 ",%lf,%lf,%lf\n",
+							params->worker_id,
+							req.request.req_id,
+							TSPEC_TO_DOUBLE(req.request.req_timestamp),
+							OPCODE_TO_STRING(req.request.img_op),
+							req.request.overwrite,
+							req.request.img_id,
+							req.request.img_id,
+							TSPEC_TO_DOUBLE(req.receipt_timestamp),
+							TSPEC_TO_DOUBLE(req.start_timestamp),
+							TSPEC_TO_DOUBLE(req.completion_timestamp));
+
+						dump_queue_status(params->the_queue);
+					} else {
+						// Image not found
+						err = 1;
+					}
+					continue; // Move to the next request
+				default:
+					/* Unknown operation */
+					err = 1;
+					break;
+			}
+
+			if (err == 0 && newImage != NULL) {
+				/* Handle overwrite logic */
+				if (req.request.overwrite == 0) {
+					/* Create a new image ID */
+					new_img_id = get_new_image_id();
+					image_array[new_img_id] = newImage;
+				} else {
+					/* Overwrite the original image */
+					deleteImage(image_array[req.request.img_id]);
+					image_array[req.request.img_id] = newImage;
+					new_img_id = req.request.img_id;
+				}
+				
+				/* Record completion timestamp */
+				clock_gettime(CLOCK_MONOTONIC, &req.completion_timestamp);
+
+				/* Send response */
+				resp.req_id = req.request.req_id;
+				resp.img_id = new_img_id;
+				resp.ack = RESP_COMPLETED;
+				send(params->conn_socket, &resp, sizeof(struct response), 0);
+
+				/* Print status report */
+				sync_printf("T%d R%" PRIu64 ":%lf,%s,%d,%" PRIu64 ",%" PRIu64 ",%lf,%lf,%lf\n",
+					params->worker_id,
+					req.request.req_id,
+					TSPEC_TO_DOUBLE(req.request.req_timestamp),
+					OPCODE_TO_STRING(req.request.img_op),
+					req.request.overwrite,
+					req.request.img_id,
+					new_img_id,
+					TSPEC_TO_DOUBLE(req.receipt_timestamp),
+					TSPEC_TO_DOUBLE(req.start_timestamp),
+					TSPEC_TO_DOUBLE(req.completion_timestamp));
+
+				dump_queue_status(params->the_queue);
+			} else {
+				// Handle Error
+				resp.req_id = req.request.req_id;
+				resp.img_id = 0;
+				resp.ack = RESP_REJECTED;
+				send(params->conn_socket, &resp, sizeof(struct response), 0);
+			}
+		} else {
+		    /* Handle error */
+            resp.req_id = req.request.req_id;
+            resp.img_id = 0;
+            resp.ack = RESP_REJECTED;
+            send(params->conn_socket, &resp, sizeof(struct response), 0);
+        }
 	}
-
 	return NULL;
 }
 
@@ -401,6 +535,8 @@ void handle_connection(int conn_socket, struct connection_params conn_params)
 	struct request_meta * req;
 	struct queue * the_queue;
 	size_t in_bytes;
+	int counter = 0; // initalize counter for img_id
+	memset(image_array, 0, sizeof(image_array)); // initialize images array to null
 
 	/* The connection with the client is alive here. Let's start
 	 * the worker thread. */
@@ -450,25 +586,62 @@ void handle_connection(int conn_socket, struct connection_params conn_params)
 			  registering an image :) 
 			 )
 			  */
+			clock_gettime(CLOCK_MONOTONIC, &req->start_timestamp);
+			if (req->request.img_op == IMG_REGISTER) {
+					// Handle IMG_REGISTER
+					if (counter >= 1024) {
+						// Send rejection response
+						struct response resp = {req->request.req_id, 0, RESP_REJECTED};
+						send(conn_socket, &resp, sizeof(struct response), 0);
+						continue;
+					}
 
-			res = add_to_queue(*req, the_queue);
+					// Receive image
+					struct image *image = recvImage(conn_socket);
 
-			/* The queue is full if the return value is 1 */
-			if (res) {
-				struct response resp;
-				/* Now provide a response! */
-				resp.req_id = req->request.req_id;
-				resp.ack = RESP_REJECTED;
-				send(conn_socket, &resp, sizeof(struct response), 0);
+					if (image != NULL) {
+						// Successfully received image
+						image_array[counter] = image;
 
-				sync_printf("X%ld:%lf,%lf,%lf\n", req->request.req_id,
-				       TSPEC_TO_DOUBLE(req->request.req_timestamp),
-				       TSPEC_TO_DOUBLE(req->request.req_length),
-				       TSPEC_TO_DOUBLE(req->receipt_timestamp)
-					);
+						// Prepare and send response
+						struct response resp = {req->request.req_id, counter, RESP_COMPLETED};
+						clock_gettime(CLOCK_MONOTONIC, &req->completion_timestamp);
+						send(conn_socket, &resp, sizeof(struct response), 0);
+
+						// Print status report
+						sync_printf("T1 R%" PRIu64 ":%lf,%s,%d,0,%" PRIu64 ",%lf,%lf,%lf\n",
+							req->request.req_id,
+							TSPEC_TO_DOUBLE(req->request.req_timestamp),
+							OPCODE_TO_STRING(req->request.img_op),
+							req->request.overwrite,
+							resp.img_id,
+							TSPEC_TO_DOUBLE(req->receipt_timestamp),
+							TSPEC_TO_DOUBLE(req->start_timestamp),
+							TSPEC_TO_DOUBLE(req->completion_timestamp));
+
+						counter++;  // Increment image counter
+					} else {
+						// Failed to receive image, send rejection response
+						struct response resp = {req->request.req_id, 0, RESP_REJECTED};
+						send(conn_socket, &resp, sizeof(struct response), 0);
+					}
+				} else {
+					// Enqueue the request
+					res = add_to_queue(*req, the_queue);
+
+					if (res) {
+						// Queue is full, send rejection
+						struct response resp = {req->request.req_id, 0, RESP_REJECTED};
+						send(conn_socket, &resp, sizeof(struct response), 0);
+
+						sync_printf("X%" PRIu64 ":%lf,%lf,%lf\n", req->request.req_id,
+							TSPEC_TO_DOUBLE(req->request.req_timestamp),
+							TSPEC_TO_DOUBLE(req->request.req_length),
+							TSPEC_TO_DOUBLE(req->receipt_timestamp));
+					}
+				}
 			}
-		}
-	} while (in_bytes > 0);
+		} while (in_bytes > 0);
 
 
 	/* Stop all the worker threads. */
@@ -620,6 +793,13 @@ int main (int argc, char ** argv) {
 	/* Ready to handle the new connection with the client. */
 	handle_connection(accepted, conn_params);
 
+	// Clean up images
+	for (int i = 0; i < 1024; i++) {
+		if (image_array[i] != NULL) {
+			deleteImage(image_array[i]);
+			image_array[i] = NULL;
+		}
+	}
 	free(queue_mutex);
 	free(queue_notify);
 
